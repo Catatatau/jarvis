@@ -220,6 +220,65 @@ function AppContent() {
     setLogs(prev => [...prev, { id: Date.now(), sender, text }]);
   };
 
+  const readJsonSafely = async (res) => {
+    try {
+      return await res.json();
+    } catch {
+      return {};
+    }
+  };
+
+  const getVisionDiagnostics = async () => {
+    const lines = [`API: ${apiUrl}`];
+    let sawPython = false;
+    let sawNewBackend = false;
+
+    try {
+      const res = await fetch(`${apiUrl}/vision/status`, {
+        headers: { 'ngrok-skip-browser-warning': 'true' }
+      });
+      const data = await readJsonSafely(res);
+      if ('available' in data) {
+        sawNewBackend = true;
+        lines.push(`Vision available: ${data.available ? 'sim' : 'nao'}`);
+      }
+      if (data.error) lines.push(`Vision error: ${data.error}`);
+      if (data.python) {
+        sawPython = true;
+        lines.push(`Python do Agent: ${data.python}`);
+        if (!data.python.toLowerCase().includes('.venv')) {
+          lines.push('Aviso: o Agent nao esta usando python-agent\\.venv. Feche o Agent antigo e rode scripts\\start-tudo.bat atualizado.');
+        }
+      }
+    } catch {
+      lines.push('Nao consegui ler /vision/status.');
+    }
+
+    try {
+      const res = await fetch(`${apiUrl}/health`, {
+        headers: { 'ngrok-skip-browser-warning': 'true' }
+      });
+      const data = await readJsonSafely(res);
+      if (data.python && !sawPython) {
+        sawPython = true;
+        lines.push(`Python do Agent: ${data.python}`);
+      }
+      if (data.vision_error) lines.push(`Health vision_error: ${data.vision_error}`);
+      if ('vision_available' in data && !sawNewBackend) {
+        sawNewBackend = true;
+        lines.push(`Health vision_available: ${data.vision_available ? 'sim' : 'nao'}`);
+      }
+    } catch {
+      lines.push('Nao consegui ler /health.');
+    }
+
+    if (!sawNewBackend) {
+      lines.push('Backend sem diagnostico novo. Atualize o repo, feche os Agents antigos e rode scripts\\start-tudo.bat.');
+    }
+
+    return lines.join('\n');
+  };
+
   const handleMessageSubmit = async (textToSend) => {
     if (!textToSend.trim()) return;
     addMessage('user', textToSend);
@@ -253,6 +312,8 @@ function AppContent() {
   };
 
   const togglePcVision = async (action) => {
+    addMessage('user', action === 'start' ? 'Ligar camera/gestos' : 'Desligar camera');
+    setIsTyping(true);
     try {
       const res = await fetch(`${apiUrl}/vision/${action}`, {
         method: 'POST',
@@ -261,11 +322,19 @@ function AppContent() {
           'ngrok-skip-browser-warning': 'true'
         }
       });
-      const data = await res.json();
-      addMessage('system', data.result);
-      speak(data.result);
+      const data = await readJsonSafely(res);
+      const resultText = data.result || data.text || 'Resposta vazia do servidor de visao.';
+      addMessage('system', resultText);
+      speak(resultText);
+
+      if (!res.ok || data.success === false) {
+        const diagnostics = await getVisionDiagnostics();
+        addMessage('system', `Diagnostico da visao:\n${diagnostics}`);
+      }
     } catch {
-      addMessage('system', 'Erro ao alterar visão do PC.');
+      addMessage('system', `Erro ao alterar visao do PC. API configurada: ${apiUrl}`);
+    } finally {
+      setIsTyping(false);
     }
   };
 
